@@ -57,6 +57,14 @@ class TestSnapshotCreate:
         assert meta.tag == "before-deploy"
         assert "before-deploy" in meta.id
 
+    def test_with_path_like_tag_uses_safe_snapshot_id(self, team_with_data):
+        meta = SnapshotManager(team_with_data).create(tag="before/deploy")
+        assert meta.tag == "before/deploy"
+        assert "before-deploy" in meta.id
+
+        path = _snapshots_root(team_with_data) / f"snap-{meta.id}.json"
+        assert path.exists()
+
     def test_snapshot_file_written(self, team_with_data):
         meta = SnapshotManager(team_with_data).create()
         path = _snapshots_root(team_with_data) / f"snap-{meta.id}.json"
@@ -172,6 +180,27 @@ class TestSnapshotRestore:
 
         mgr.restore(meta.id)
         assert len(CostStore(team_with_data).list_events()) == 1
+
+    def test_restore_replaces_newer_state_instead_of_overlaying(self, team_with_data):
+        mgr = SnapshotManager(team_with_data)
+        meta = mgr.create()
+
+        ts = TaskStore(team_with_data)
+        ts.create("newer task", owner="leader")
+
+        team_dir = get_data_dir() / "teams" / team_with_data
+        events_dir = team_dir / "events"
+        events_dir.mkdir(parents=True, exist_ok=True)
+        (events_dir / "evt-extra.json").write_text('{"id":"extra"}', encoding="utf-8")
+
+        mgr.restore(meta.id)
+
+        tasks = TaskStore(team_with_data).list_tasks()
+        assert len(tasks) == 2
+        assert {task.subject for task in tasks} == {"task one", "task two"}
+
+        event_files = {p.name for p in events_dir.glob("*.json")}
+        assert "evt-extra.json" not in event_files
 
 
 class TestSnapshotDelete:

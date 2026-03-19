@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -50,6 +52,11 @@ def _read_json_dir(directory: Path, pattern: str) -> list[dict]:
     return items
 
 
+def _safe_snapshot_tag(tag: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", tag).strip("-._")
+    return safe or "snapshot"
+
+
 class SnapshotManager:
     """Create and restore full team state snapshots.
 
@@ -89,7 +96,7 @@ class SnapshotManager:
                         inboxes[agent_dir.name] = msgs
 
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-        snap_id = f"{ts}-{tag}" if tag else ts
+        snap_id = f"{ts}-{_safe_snapshot_tag(tag)}" if tag else ts
 
         meta = SnapshotMeta(
             id=snap_id,
@@ -161,6 +168,18 @@ class SnapshotManager:
 
         data_dir = get_data_dir()
         team_dir = self._team_dir()
+
+        # Restore should replace current team state for this snapshot domain,
+        # not overlay on top of newer tasks/events/messages.
+        for path in (
+            data_dir / "tasks" / self.team_name,
+            team_dir / "events",
+            data_dir / "sessions" / self.team_name,
+            data_dir / "costs" / self.team_name,
+            team_dir / "inboxes",
+        ):
+            if path.exists():
+                shutil.rmtree(path)
 
         # config
         if bundle.get("config"):
