@@ -29,7 +29,14 @@
 
 ---
 
-https://github.com/user-attachments/assets/f6f0b220-9a5e-4d0a-a25d-f80753d3639b
+<p align="center">
+  <video src="https://github.com/user-attachments/assets/7e2f0ecd-8fe3-4970-90ac-5c9669ff060c" controls muted playsinline width="800">
+    <a href="https://github.com/user-attachments/assets/7e2f0ecd-8fe3-4970-90ac-5c9669ff060c">观看演示视频</a>
+  </video>
+</p>
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/7e2f0ecd-8fe3-4970-90ac-5c9669ff060c">直接打开演示视频</a>
+</p>
 
 *☝️ 一个 Leader Claude Agent 在 8 块 H100 GPU 上自主创建 8 个子 Agent，分配实验方向，监控进度，交叉融合发现，并及时纠正无效方向 —— 全程无人干预。*
 

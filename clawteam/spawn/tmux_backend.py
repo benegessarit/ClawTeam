@@ -14,6 +14,7 @@ from clawteam.spawn.adapters import (
     is_claude_command,
     is_codex_command,
     is_gemini_command,
+    is_kimi_command,
     is_nanobot_command,
 )
 from clawteam.spawn.base import SpawnBackend
@@ -184,7 +185,13 @@ class TmuxBackend(SpawnBackend):
                 stderr=subprocess.PIPE,
             )
             os.unlink(tmp_path)
-        elif prompt and not is_codex_command(normalized_command) and not is_nanobot_command(normalized_command) and not is_gemini_command(normalized_command):
+        elif (
+            prompt
+            and not is_codex_command(normalized_command)
+            and not is_nanobot_command(normalized_command)
+            and not is_gemini_command(normalized_command)
+            and not is_kimi_command(normalized_command)
+        ):
             time.sleep(1)
             subprocess.run(
                 ["tmux", "send-keys", "-t", target, prompt, "Enter"],
@@ -355,16 +362,6 @@ def _looks_like_workspace_trust_prompt(command: list[str], pane_text: str) -> bo
         return "trust folder" in pane_text or "trust parent folder" in pane_text
 
     return False
-
-
-def _is_interactive_cli(command: list[str]) -> bool:
-    """Check if the command is an interactive AI CLI."""
-    return (
-        is_claude_command(command)
-        or is_codex_command(command)
-        or is_nanobot_command(command)
-        or is_gemini_command(command)
-    )
 
 
 def _wait_for_claude_ready(

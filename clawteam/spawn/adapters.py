@@ -18,7 +18,7 @@ class PreparedCommand:
 
 
 class NativeCliAdapter:
-    """Adapter for direct CLI runtimes such as claude, codex, gemini, nanobot."""
+    """Adapter for direct CLI runtimes such as claude, codex, gemini, kimi, nanobot."""
 
     def prepare_command(
         self,
@@ -40,8 +40,15 @@ class NativeCliAdapter:
                 final_command.append("--dangerously-bypass-approvals-and-sandbox")
             elif is_gemini_command(normalized_command):
                 final_command.append("--yolo")
+            elif is_kimi_command(normalized_command):
+                final_command.append("--yolo")
 
-        if is_nanobot_command(normalized_command):
+        if is_kimi_command(normalized_command):
+            if cwd and not command_has_workspace_arg(normalized_command):
+                final_command.extend(["-w", cwd])
+            if prompt:
+                final_command.extend(["--print", "-p", prompt])
+        elif is_nanobot_command(normalized_command):
             if cwd and not command_has_workspace_arg(normalized_command):
                 final_command.extend(["-w", cwd])
             if prompt:
@@ -86,6 +93,11 @@ def is_nanobot_command(command: list[str]) -> bool:
 def is_gemini_command(command: list[str]) -> bool:
     """Check if the command is a Gemini CLI invocation."""
     return command_basename(command) == "gemini"
+
+
+def is_kimi_command(command: list[str]) -> bool:
+    """Check if the command is a Kimi CLI invocation."""
+    return command_basename(command) == "kimi"
 
 
 def command_has_workspace_arg(command: list[str]) -> bool:

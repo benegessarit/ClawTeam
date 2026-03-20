@@ -118,7 +118,14 @@
 
 ---
 
-https://github.com/user-attachments/assets/f6f0b220-9a5e-4d0a-a25d-f80753d3639b
+<p align="center">
+  <video src="https://github.com/user-attachments/assets/7e2f0ecd-8fe3-4970-90ac-5c9669ff060c" controls muted playsinline width="800">
+    <a href="https://github.com/user-attachments/assets/7e2f0ecd-8fe3-4970-90ac-5c9669ff060c">데모 비디오 보기</a>
+  </video>
+</p>
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/7e2f0ecd-8fe3-4970-90ac-5c9669ff060c">데모 비디오 직접 열기</a>
+</p>
 
 ☝️ 지능형 리더 에이전트가 8대의 H100 GPU에 걸쳐 8개의 전문 서브에이전트를 조율하며, 실시간 성능에 맞춰 자원을 동적으로 재배치하면서 실험을 자율적으로 설계합니다.
 

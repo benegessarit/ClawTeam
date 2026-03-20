@@ -463,6 +463,96 @@ def test_tmux_backend_confirms_gemini_workspace_trust_prompt(monkeypatch):
     assert ["tmux", "send-keys", "-t", "demo:agent", "Enter"] in run_calls
 
 
+def test_tmux_backend_kimi_skip_permissions_workspace_and_prompt(monkeypatch, tmp_path):
+    """Kimi gets --yolo, -w for workspace, and --print -p for prompt."""
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    clawteam_bin = tmp_path / "venv" / "bin" / "clawteam"
+    clawteam_bin.parent.mkdir(parents=True)
+    clawteam_bin.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(sys, "argv", [str(clawteam_bin)])
+
+    run_calls: list[list[str]] = []
+
+    class Result:
+        def __init__(self, returncode: int = 0, stdout: str = ""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = ""
+
+    def fake_run(args, **kwargs):
+        run_calls.append(args)
+        if args[:3] == ["tmux", "has-session", "-t"]:
+            return Result(returncode=1)
+        if args[:3] == ["tmux", "list-panes", "-t"]:
+            return Result(returncode=0, stdout="9876\n")
+        return Result(returncode=0)
+
+    def fake_which(name, path=None):
+        if name == "tmux":
+            return "/usr/bin/tmux"
+        if name == "kimi":
+            return "/usr/bin/kimi"
+        return None
+
+    monkeypatch.setattr("clawteam.spawn.tmux_backend.shutil.which", fake_which)
+    monkeypatch.setattr("clawteam.spawn.command_validation.shutil.which", fake_which)
+    monkeypatch.setattr("clawteam.spawn.tmux_backend.subprocess.run", fake_run)
+    monkeypatch.setattr("clawteam.spawn.tmux_backend.time.sleep", lambda *_: None)
+    monkeypatch.setattr("clawteam.spawn.registry.register_agent", lambda **_: None)
+
+    backend = TmuxBackend()
+    backend.spawn(
+        command=["kimi"],
+        agent_name="coder",
+        agent_id="agent-3",
+        agent_type="general-purpose",
+        team_name="demo-team",
+        prompt="fix the bug",
+        cwd="/tmp/demo",
+        skip_permissions=True,
+    )
+
+    new_session = next(call for call in run_calls if call[:3] == ["tmux", "new-session", "-d"])
+    full_cmd = new_session[-1]
+    assert " kimi --yolo -w /tmp/demo --print -p 'fix the bug';" in full_cmd
+
+
+def test_subprocess_backend_kimi_skip_permissions_workspace_and_prompt(monkeypatch, tmp_path):
+    """Kimi subprocess uses --yolo, -w, and --print -p flags."""
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    clawteam_bin = tmp_path / "venv" / "bin" / "clawteam"
+    clawteam_bin.parent.mkdir(parents=True)
+    clawteam_bin.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(sys, "argv", [str(clawteam_bin)])
+
+    captured: dict[str, object] = {}
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return DummyProcess()
+
+    monkeypatch.setattr(
+        "clawteam.spawn.command_validation.shutil.which",
+        lambda name, path=None: "/usr/bin/kimi" if name == "kimi" else None,
+    )
+    monkeypatch.setattr("clawteam.spawn.subprocess_backend.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("clawteam.spawn.registry.register_agent", lambda **_: None)
+
+    backend = SubprocessBackend()
+    backend.spawn(
+        command=["kimi"],
+        agent_name="coder",
+        agent_id="agent-3",
+        agent_type="general-purpose",
+        team_name="demo-team",
+        prompt="fix the bug",
+        cwd="/tmp/demo",
+        skip_permissions=True,
+    )
+
+    assert "kimi --yolo -w /tmp/demo --print -p 'fix the bug'" in captured["cmd"]
+
+
 def test_resolve_clawteam_executable_ignores_unrelated_argv0(monkeypatch, tmp_path):
     unrelated = tmp_path / "not-clawteam-review"
     unrelated.write_text("#!/bin/sh\n")

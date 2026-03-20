@@ -64,11 +64,11 @@ Full compatibility with [Claude Code](https://claude.ai/claude-code), [Codex](ht
 
 <p align="center"><strong>• Autonomous Full-Stack Development</strong></p>
 
-<p align="center"><strong>• Self-Evolving Software<strong></p>
+<p align="center"><strong>• Self-Evolving Software</strong></p>
 
-<p align="center"><strong>• Collaborative Open Source Development<strong></p>
+<p align="center"><strong>• Collaborative Open Source Development</strong></p>
 
-<p align="center"><strong>• Real-Time System Integration<strong></p>
+<p align="center"><strong>• Real-Time System Integration</strong></p>
 
 </td>
 <td width="25%" align="center" style="vertical-align: top; padding: 15px;">
@@ -114,8 +114,14 @@ Full compatibility with [Claude Code](https://claude.ai/claude-code), [Codex](ht
 
 ---
 
-
-https://github.com/user-attachments/assets/7e2f0ecd-8fe3-4970-90ac-5c9669ff060c
+<p align="center">
+  <video src="https://github.com/user-attachments/assets/7e2f0ecd-8fe3-4970-90ac-5c9669ff060c" controls muted playsinline width="800">
+    <a href="https://github.com/user-attachments/assets/7e2f0ecd-8fe3-4970-90ac-5c9669ff060c">Watch the demo video</a>
+  </video>
+</p>
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/7e2f0ecd-8fe3-4970-90ac-5c9669ff060c">Open the demo video directly</a>
+</p>
 
 
 ☝️ Intelligent leader agent orchestrates 8 specialized sub-agents across 8 H100 GPUs, autonomously designing experiments and dynamically reallocating resources based on real-time performance.
@@ -146,7 +152,7 @@ ClawTeam unlocks **Agent Swarm Intelligence** — where AI agents self-organize 
 
 • **🔄 Adapts strategies dynamically** — reallocates resources and redirects efforts
 
-#### ✨ The Result?**
+#### ✨ The Result?
 You set the vision. The swarm executes with collective intelligence.
 
 <p align="center">
@@ -718,7 +724,7 @@ We welcome contributions! ClawTeam is designed to be extensible:
 
 ## ⭐ Star History
 
-If you find ClawTeam helpful, please consider to give us a star! ⭐
+If you find ClawTeam helpful, please consider giving us a star! ⭐
 
 <div align="center">
   <a href="https://star-history.com/#HKUDS/ClawTeam&Date">
