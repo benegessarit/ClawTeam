@@ -205,8 +205,12 @@ def _cmux_workspace_alive(workspace_name: str) -> bool:
     if result.returncode != 0:
         return False
     for line in result.stdout.strip().splitlines():
-        if workspace_name in line:
-            return True
+        parts = line.strip().split()
+        for i, part in enumerate(parts):
+            if part.startswith("workspace:") and i + 1 < len(parts):
+                if parts[i + 1] == workspace_name:
+                    return True
+                break
     return False
 
 

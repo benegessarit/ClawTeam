@@ -43,7 +43,7 @@ def _cmux_available() -> bool:
 
 
 def _cmux_workspace_exists(name: str) -> bool:
-    """Check if a cmux workspace with the given name exists."""
+    """Check if a cmux workspace with the given exact name exists."""
     try:
         result = subprocess.run(
             [_CMUX_BIN, "list-workspaces"],
@@ -56,8 +56,14 @@ def _cmux_workspace_exists(name: str) -> bool:
     if result.returncode != 0:
         return False
     for line in result.stdout.strip().splitlines():
-        if name in line:
-            return True
+        # Parse workspace name from line: "  workspace:N  name  [selected]"
+        parts = line.strip().split()
+        for i, part in enumerate(parts):
+            if part.startswith("workspace:") and i + 1 < len(parts):
+                ws_name = parts[i + 1]
+                if ws_name == name:
+                    return True
+                break
     return False
 
 
