@@ -7,6 +7,7 @@ import os
 import re
 import shlex
 import subprocess
+import tempfile
 import time
 
 from clawteam.spawn.adapters import (
@@ -158,9 +159,15 @@ class CmuxBackend(SpawnBackend):
         if command_error:
             return command_error
 
-        # Build shell-safe env exports (filter out invalid env var names)
+        # Write env to temp file to avoid exposing secrets in terminal scrollback.
+        # The file is sourced then deleted — secrets never appear in the command line.
+        import tempfile
         export_vars = {k: v for k, v in env_vars.items() if _SHELL_ENV_KEY_RE.fullmatch(k)}
-        export_str = "; ".join(f"export {k}={shlex.quote(v)}" for k, v in export_vars.items())
+        env_fd, env_path = tempfile.mkstemp(prefix="clawteam-env-", suffix=".sh")
+        with os.fdopen(env_fd, "w") as f:
+            for k, v in export_vars.items():
+                f.write(f"export {k}={shlex.quote(v)}\n")
+        os.chmod(env_path, 0o600)  # restrict read to owner
 
         cmd_str = " ".join(shlex.quote(c) for c in final_command)
         # On-exit hook: runs when agent process exits
@@ -170,19 +177,18 @@ class CmuxBackend(SpawnBackend):
             f"--agent {shlex.quote(agent_name)}"
         )
         # Auto-close cmux workspace after agent exits + lifecycle cleanup.
-        # 30s delay lets user inspect scrollback before workspace disappears.
-        # The workspace name is set later; use team-agent format.
         ws_name = f"{team_name}-{agent_name}"
         cmux_cleanup = (
             f"echo '\\n[Agent exited. Workspace closes in 30s. Press Ctrl-C to keep.]'; "
             f"sleep 30 && {shlex.quote(_CMUX_BIN)} close-workspace --workspace {shlex.quote(ws_name)} 2>/dev/null"
         )
-        # Unset Claude nesting-detection env vars so spawned agents don't refuse to start
+        # Source env from file (secrets stay off terminal), then delete the file
+        env_source = f". {shlex.quote(env_path)} && rm -f {shlex.quote(env_path)}"
         unset_clause = "unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION 2>/dev/null; "
         if cwd:
-            full_cmd = f"{unset_clause}{export_str}; cd {shlex.quote(cwd)} || exit 1; {cmd_str}; {exit_hook}; {cmux_cleanup}"
+            full_cmd = f"{unset_clause}{env_source}; cd {shlex.quote(cwd)} || exit 1; {cmd_str}; {exit_hook}; {cmux_cleanup}"
         else:
-            full_cmd = f"{unset_clause}{export_str}; {cmd_str}; {exit_hook}; {cmux_cleanup}"
+            full_cmd = f"{unset_clause}{env_source}; {cmd_str}; {exit_hook}; {cmux_cleanup}"
 
         # Remember current workspace to restore focus after spawn
         previous_workspace = _cmux_get_current_workspace()
@@ -222,14 +228,37 @@ class CmuxBackend(SpawnBackend):
                 capture_output=True, text=True, timeout=5,
             )
 
-            # Send the full command to the new surface's terminal
+            # Write command to temp script — cmux send chokes on long commands.
+            # Script self-deletes after sourcing so env vars land in the shell.
+            script = tempfile.NamedTemporaryFile(
+                mode="w", prefix="clawteam-surface-", suffix=".sh", delete=False,
+            )
+            script.write("#!/usr/bin/env bash\n")
+            script.write(f"rm -f {shlex.quote(script.name)}\n")
+            script.write(full_cmd + "\n")
+            script.close()
+            os.chmod(script.name, 0o700)
+
             subprocess.run(
-                [_CMUX_BIN, "send", "--surface", surface_ref, "--", full_cmd + "\n"],
+                [_CMUX_BIN, "send", "--surface", surface_ref, "--", f"source {shlex.quote(script.name)}\n"],
                 capture_output=True, text=True, timeout=10,
             )
 
             cmux_handle = surface_ref
             spawned_as_surface = True
+
+            # Wait for CLI readiness, then inject prompt (same as workspace mode)
+            if prompt or post_launch_prompt:
+                from clawteam.config import load_config
+                cfg = load_config()
+                _wait_for_surface_ready(
+                    surface_ref,
+                    timeout_seconds=cfg.spawn_ready_timeout,
+                    fallback_delay=cfg.spawn_prompt_delay,
+                )
+                inject_text = post_launch_prompt or prompt or ""
+                if inject_text:
+                    _inject_prompt_via_surface(surface_ref, inject_text)
         else:
             # --- Workspace mode: each agent gets its own sidebar workspace ---
             try:
@@ -265,20 +294,23 @@ class CmuxBackend(SpawnBackend):
             cmux_handle = workspace_ref or workspace_name
 
         if not spawned_as_surface:
-            # Set team badge in sidebar (only meaningful for workspace mode)
-            team_type = "side-quest" if team_name.startswith("sq-") else "build"
-            icon = "magnifier" if team_type == "side-quest" else "hammer"
-            color = "#007aff" if team_type == "side-quest" else "#ff9500"
-            subprocess.run(
-                [_CMUX_BIN, "set-status", "team", team_name,
-                 "--icon", icon, "--color", color, "--workspace", cmux_handle],
-                capture_output=True, text=True, timeout=5,
-            )
-            subprocess.run(
-                [_CMUX_BIN, "set-status", "role", agent_name,
-                 "--icon", "sparkle", "--workspace", cmux_handle],
-                capture_output=True, text=True, timeout=5,
-            )
+            # Set team badge in sidebar (cosmetic — failure must not block spawn)
+            try:
+                team_type = "side-quest" if team_name.startswith("sq-") else "build"
+                icon = "magnifier" if team_type == "side-quest" else "hammer"
+                color = "#007aff" if team_type == "side-quest" else "#ff9500"
+                subprocess.run(
+                    [_CMUX_BIN, "set-status", "team", team_name,
+                     "--icon", icon, "--color", color, "--workspace", cmux_handle],
+                    capture_output=True, text=True, timeout=5,
+                )
+                subprocess.run(
+                    [_CMUX_BIN, "set-status", "role", agent_name,
+                     "--icon", "sparkle", "--workspace", cmux_handle],
+                    capture_output=True, text=True, timeout=5,
+                )
+            except (subprocess.TimeoutExpired, OSError):
+                pass  # badge failure is cosmetic, don't block spawn
 
         # Restore focus to previous workspace to avoid focus steal
         if previous_workspace and not spawned_as_surface:
@@ -615,4 +647,81 @@ def _inject_prompt_via_keys(workspace_name: str, prompt: str) -> bool:
         return True
     finally:
         import os
+        os.unlink(prompt_file)
+
+
+def _wait_for_surface_ready(
+    surface_ref: str,
+    timeout_seconds: float = 30.0,
+    fallback_delay: float = 2.0,
+    poll_interval: float = 1.0,
+) -> bool:
+    """Poll cmux surface until CLI shows an input prompt."""
+    deadline = time.monotonic() + timeout_seconds
+    last_content = ""
+    stable_count = 0
+
+    while time.monotonic() < deadline:
+        try:
+            result = subprocess.run(
+                [_CMUX_BIN, "read-screen", "--surface", surface_ref],
+                capture_output=True, text=True, timeout=5,
+            )
+            text = result.stdout if result.returncode == 0 else ""
+        except (subprocess.TimeoutExpired, OSError):
+            text = ""
+
+        if not text:
+            time.sleep(poll_interval)
+            continue
+
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        tail = lines[-10:] if len(lines) >= 10 else lines
+
+        for line in tail:
+            if line.startswith(("\u276f", ">", "\u203a")):
+                return True
+            if "Try " in line and "write a test" in line:
+                return True
+            if "-- INSERT --" in line:
+                return True
+
+        if text == last_content and lines:
+            stable_count += 1
+            if stable_count >= 2:
+                return True
+        else:
+            stable_count = 0
+            last_content = text
+
+        time.sleep(poll_interval)
+    time.sleep(fallback_delay)
+    return False
+
+
+def _inject_prompt_via_surface(surface_ref: str, prompt: str) -> bool:
+    """Inject a prompt into a cmux surface via send + send-key."""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+        f.write(prompt)
+        prompt_file = f.name
+
+    try:
+        with open(prompt_file) as f:
+            prompt_text = f.read()
+
+        result = subprocess.run(
+            [_CMUX_BIN, "send", "--surface", surface_ref, prompt_text],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return False
+
+        time.sleep(0.5)
+
+        result = subprocess.run(
+            [_CMUX_BIN, "send-key", "--surface", surface_ref, "Enter"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return result.returncode == 0
+    finally:
         os.unlink(prompt_file)
