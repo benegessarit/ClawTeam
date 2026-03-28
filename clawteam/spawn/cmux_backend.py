@@ -311,9 +311,15 @@ class CmuxBackend(SpawnBackend):
             f"{exit_cmd} lifecycle on-exit --team {shlex.quote(team_name)} "
             f"--agent {shlex.quote(agent_name)}"
         )
-        # Auto-close cmux workspace after agent exits + lifecycle cleanup.
+        # Auto-close cmux workspace after agent exits + cleanup badges.
         ws_name = f"{team_name}-{agent_name}"
+        # Clear sidebar badges on exit (prevents stale pill accumulation)
+        badge_cleanup = (
+            f"{shlex.quote(_CMUX_BIN)} clear-status agent 2>/dev/null; "
+            f"{shlex.quote(_CMUX_BIN)} clear-status task 2>/dev/null"
+        )
         cmux_cleanup = (
+            f"{badge_cleanup}; "
             f"echo '\\n[Agent exited. Workspace closes in 30s. Press Ctrl-C to keep.]'; "
             f"sleep 30 && {shlex.quote(_CMUX_BIN)} close-workspace --workspace {shlex.quote(ws_name)} 2>/dev/null"
         )
@@ -423,8 +429,20 @@ class CmuxBackend(SpawnBackend):
 
         # Set team badge in sidebar (cosmetic — failure must not block spawn)
         # For tabs (surface mode), badge goes on the parent workspace
+        # Clear stale badges first to prevent accumulation from previous spawns
         badge_target = parent_workspace if is_surface else cmux_handle
         if badge_target:
+            try:
+                subprocess.run(
+                    [_CMUX_BIN, "clear-status", "agent", "--workspace", badge_target],
+                    capture_output=True, text=True, timeout=3,
+                )
+                subprocess.run(
+                    [_CMUX_BIN, "clear-status", "task", "--workspace", badge_target],
+                    capture_output=True, text=True, timeout=3,
+                )
+            except (subprocess.TimeoutExpired, OSError):
+                pass
             try:
                 is_sidequest = team_name.startswith("sq") or team_name.startswith("sidequest")
                 team_type = "side-quest" if is_sidequest else "build"
