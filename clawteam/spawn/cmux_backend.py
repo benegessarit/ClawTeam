@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import tempfile
 import time
@@ -416,25 +417,29 @@ class CmuxBackend(SpawnBackend):
         from clawteam.config import load_config
         cfg = load_config()
 
-        # --- Workspace-only post-spawn: badge, focus restore, visibility ---
-        if not is_surface:
-            # Set team badge in sidebar (cosmetic — failure must not block spawn)
+        # Set team badge in sidebar (cosmetic — failure must not block spawn)
+        # For tabs (surface mode), badge goes on the parent workspace
+        badge_target = parent_workspace if is_surface else cmux_handle
+        if badge_target:
             try:
                 team_type = "side-quest" if team_name.startswith("sq-") else "build"
                 icon = "magnifier" if team_type == "side-quest" else "hammer"
                 color = "#007aff" if team_type == "side-quest" else "#ff9500"
                 subprocess.run(
                     [_CMUX_BIN, "set-status", "team", team_name,
-                     "--icon", icon, "--color", color, "--workspace", cmux_handle],
+                     "--icon", icon, "--color", color, "--workspace", badge_target],
                     capture_output=True, text=True, timeout=5,
                 )
                 subprocess.run(
                     [_CMUX_BIN, "set-status", "role", agent_name,
-                     "--icon", "sparkle", "--workspace", cmux_handle],
+                     "--icon", "sparkle", "--workspace", badge_target],
                     capture_output=True, text=True, timeout=5,
                 )
             except (subprocess.TimeoutExpired, OSError):
                 pass  # badge failure is cosmetic, don't block spawn
+
+        # --- Workspace-only post-spawn: focus restore, visibility ---
+        if not is_surface:
 
             # Restore focus to previous workspace to avoid focus steal
             if previous_workspace:
@@ -660,3 +665,80 @@ def _dismiss_codex_update_prompt_if_present(
 
         time.sleep(poll_interval_seconds)
     return False
+
+
+def verify_and_cleanup(team_name: str, agent_name: str = "builder") -> str:
+    """Verify build work landed, then destroy worktree + workspace.
+
+    Gate pipeline: clean worktree -> pushed -> PR merged -> destroy.
+    Returns a status string: success message or BLOCKED with reason.
+    """
+    worktree = os.path.expanduser(f"~/.clawteam/workspaces/{team_name}/{agent_name}")
+    branch = f"clawteam/{team_name}/{agent_name}"
+    workspace = f"{team_name}-{agent_name}"
+
+    worktree_exists = os.path.isdir(worktree)
+
+    if worktree_exists:
+        # Gate 1: worktree clean?
+        dirty = subprocess.run(
+            ["git", "-C", worktree, "status", "--porcelain"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+        if dirty:
+            return f"BLOCKED: Uncommitted work in {worktree}:\n{dirty}"
+
+        # Gate 2: branch pushed? (skip if upstream ref gone)
+        upstream_check = subprocess.run(
+            ["git", "-C", worktree, "rev-parse", "--verify", "@{u}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if upstream_check.returncode == 0:
+            unpushed = subprocess.run(
+                ["git", "-C", worktree, "log", "--oneline", "@{u}..HEAD"],
+                capture_output=True, text=True, timeout=10,
+            ).stdout.strip()
+            if unpushed:
+                return f"BLOCKED: Unpushed commits on {branch}:\n{unpushed}"
+
+    # Gate 3: PR merged? (runs even if worktree gone)
+    gh_path = shutil.which("gh")
+    if gh_path:
+        merged = subprocess.run(
+            ["gh", "pr", "list", "--head", branch, "--state", "merged", "--json", "number"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if merged.returncode == 0 and merged.stdout.strip() not in ("", "[]"):
+            pass  # merged — continue to cleanup
+        else:
+            open_pr = subprocess.run(
+                ["gh", "pr", "list", "--head", branch, "--state", "open", "--json", "number,url"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if open_pr.returncode == 0 and open_pr.stdout.strip() not in ("", "[]"):
+                return f"BLOCKED: PR not yet merged: {open_pr.stdout.strip()}"
+            return f"BLOCKED: No PR found for branch {branch}"
+    else:
+        print(f"Warning: gh CLI not found. Cannot verify PR status for {branch}.")
+
+    # All gates passed — destroy
+    messages = []
+
+    if worktree_exists:
+        subprocess.run(["git", "worktree", "remove", worktree, "--force"],
+                       capture_output=True, timeout=30)
+        messages.append(f"worktree removed")
+
+    subprocess.run(["git", "push", "origin", "--delete", branch],
+                   capture_output=True, timeout=15)
+    messages.append("remote branch deleted")
+
+    subprocess.run([_CMUX_BIN, "close-workspace", "--workspace", workspace],
+                   capture_output=True, text=True, timeout=5)
+    messages.append("workspace closed")
+
+    subprocess.run(["clawteam", "workspace", "cleanup", team_name],
+                   capture_output=True, text=True, timeout=10)
+    messages.append("team cleaned up")
+
+    return f"Verified and cleaned: {', '.join(messages)}."
