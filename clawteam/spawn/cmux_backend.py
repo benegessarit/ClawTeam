@@ -1,4 +1,5 @@
 """Cmux spawn backend - launches agents in cmux workspaces for visual monitoring."""
+# cmux backend v0.3.0 — send/send-key prompt injection, auto-close, exact workspace matching
 
 from __future__ import annotations
 
