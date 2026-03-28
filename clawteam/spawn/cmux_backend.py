@@ -436,10 +436,10 @@ class CmuxBackend(SpawnBackend):
                      "--icon", icon, "--color", color, "--workspace", badge_target],
                     capture_output=True, text=True, timeout=5,
                 )
-                # Show short agent name (truncated to 20 chars)
-                short_name = agent_name[:20]
+                # Show agent task name (truncated to 60 chars)
+                short_name = agent_name[:60]
                 subprocess.run(
-                    [_CMUX_BIN, "set-status", "worker", short_name,
+                    [_CMUX_BIN, "set-status", "task", short_name,
                      "--icon", "sparkle", "--workspace", badge_target],
                     capture_output=True, text=True, timeout=5,
                 )
