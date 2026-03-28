@@ -2815,6 +2815,7 @@ def spawn_agent(
     profile: Optional[str] = typer.Option(None, "--profile", help="Apply a named runtime profile"),
     agent_type: str = typer.Option("general-purpose", "--agent-type", help="Agent type"),
     task: Optional[str] = typer.Option(None, "--task", help="Task to assign (becomes the agent's initial prompt)"),
+    task_file: Optional[str] = typer.Option(None, "--task-file", help="Read task prompt from file (avoids shell quoting issues)"),
     workspace: Optional[bool] = typer.Option(None, "--workspace/--no-workspace", "-w", help="Create isolated git worktree (default: auto)"),
     repo: Optional[str] = typer.Option(None, "--repo", help="Git repo path (default: cwd)"),
     skip_permissions: Optional[bool] = typer.Option(None, "--skip-permissions/--no-skip-permissions", help="Skip tool approval for claude (default: from config, true)"),
@@ -2959,6 +2960,16 @@ def spawn_agent(
             member_added = True
     except ValueError:
         pass  # already a member, ignore
+
+    # Read task from file if --task-file provided (avoids shell quoting issues)
+    if task_file and not task:
+        from pathlib import Path as _P
+        _tf = _P(task_file).expanduser()
+        if _tf.is_file():
+            task = _tf.read_text()
+        else:
+            console.print(f"[red]Error: task file not found: {task_file}[/red]")
+            raise typer.Exit(1)
 
     # Build prompt: identity + task + clawteam coordination guide
     prompt = None
