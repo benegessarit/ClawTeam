@@ -36,10 +36,11 @@ class TestCreateTeam:
         # inbox should be user_name format
         assert (data / "teams" / team_name / "inboxes" / "bob_lead").is_dir()
 
-    def test_create_duplicate_raises(self, team_name):
-        TeamManager.create_team(name=team_name, leader_name="a", leader_id="1")
-        with pytest.raises(ValueError, match="already exists"):
-            TeamManager.create_team(name=team_name, leader_name="b", leader_id="2")
+    def test_create_duplicate_is_idempotent(self, team_name):
+        first = TeamManager.create_team(name=team_name, leader_name="a", leader_id="1")
+        second = TeamManager.create_team(name=team_name, leader_name="b", leader_id="2")
+        assert second.name == first.name
+        assert second.lead_agent_id == first.lead_agent_id
 
     def test_rejects_path_traversal_team_name(self):
         with pytest.raises(ValueError, match="Invalid team name"):

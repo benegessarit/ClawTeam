@@ -81,7 +81,7 @@ class TeamManager:
         validate_identifier(leader_name, "leader name")
         validate_identifier(user, "user name", allow_empty=True)
         if _config_path(name).exists():
-            raise ValueError(f"Team '{name}' already exists")
+            return _load_config(name)
 
         leader = TeamMember(
             name=leader_name,
