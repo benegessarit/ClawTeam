@@ -54,6 +54,7 @@ class BaseTaskStore(ABC):
         metadata: dict[str, Any] | None = None,
         caller: str = "",
         force: bool = False,
+        completion_message: str | None = None,
     ) -> TaskItem | None:
         """Update fields on an existing task. Returns the updated task or None."""
 

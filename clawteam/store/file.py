@@ -126,6 +126,7 @@ class FileTaskStore(BaseTaskStore):
         metadata: dict[str, Any] | None = None,
         caller: str = "",
         force: bool = False,
+        completion_message: str | None = None,
     ) -> TaskItem | None:
         with self._write_lock():
             task = self._get_unlocked(task_id)
@@ -173,6 +174,8 @@ class FileTaskStore(BaseTaskStore):
                 task.blocked_by = proposed_blocked_by
                 if task.blocked_by and task.status == TaskStatus.pending:
                     task.status = TaskStatus.blocked
+            if completion_message is not None:
+                task.completion_message = completion_message
             if metadata:
                 task.metadata.update(metadata)
             task.updated_at = _now_iso()

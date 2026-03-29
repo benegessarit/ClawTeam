@@ -25,6 +25,7 @@ class WaitResult:
     blocked: int = 0
     messages_received: int = 0
     task_details: list[dict] = field(default_factory=list)
+    completion_messages: list[str] = field(default_factory=list)
 
 
 class TaskWaiter:
@@ -113,6 +114,11 @@ class TaskWaiter:
                         self._messages_received += 1
                         if self.on_message:
                             self.on_message(msg)
+                    # Read completion messages from task records
+                    completion_messages = [
+                        t.completion_message for t in tasks
+                        if t.completion_message
+                    ]
                     elapsed = time.monotonic() - start
                     return WaitResult(
                         status="completed",
@@ -124,6 +130,7 @@ class TaskWaiter:
                         blocked=0,
                         messages_received=self._messages_received,
                         task_details=[_task_summary(t) for t in tasks],
+                        completion_messages=completion_messages,
                     )
 
                 # 5. Timeout?

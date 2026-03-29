@@ -1983,6 +1983,7 @@ def task_update(
     add_blocks: Optional[str] = typer.Option(None, "--add-blocks", help="Comma-separated task IDs this blocks"),
     add_blocked_by: Optional[str] = typer.Option(None, "--add-blocked-by", help="Comma-separated task IDs blocking this"),
     force: bool = typer.Option(False, "--force", "-f", help="Force override task lock"),
+    message: Optional[str] = typer.Option(None, "--message", "-m", help="Completion message stored in task record"),
 ):
     """Update a task (TaskUpdate)."""
     from clawteam.identity import AgentIdentity
@@ -2009,6 +2010,7 @@ def task_update(
             add_blocked_by=blocked_by_list,
             caller=caller,
             force=force,
+            completion_message=message,
         )
     except TaskLockError as e:
         _output({"error": str(e)}, lambda d: console.print(f"[red]Lock conflict: {d['error']}[/red]"))
@@ -2373,6 +2375,7 @@ def task_wait(
             "blocked": result.blocked,
             "messages_received": result.messages_received,
             "task_details": result.task_details,
+            "completion_messages": result.completion_messages,
         }), flush=True)
     else:
         console.print()
@@ -2381,6 +2384,8 @@ def task_wait(
                 f"[green]All {result.total} tasks completed![/green]"
                 f" ({result.elapsed:.1f}s, {result.messages_received} messages)"
             )
+            for msg in result.completion_messages:
+                console.print(f"  {msg}")
         elif result.status == "timeout":
             console.print(
                 f"[yellow]Timeout[/yellow] after {result.elapsed:.1f}s."

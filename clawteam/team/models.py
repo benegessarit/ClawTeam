@@ -139,4 +139,5 @@ class TaskItem(BaseModel):
     started_at: str = Field(default="", alias="startedAt")
     created_at: str = Field(default_factory=_now_iso, alias="createdAt")
     updated_at: str = Field(default_factory=_now_iso, alias="updatedAt")
+    completion_message: str = Field(default="", alias="completionMessage")
     metadata: dict[str, Any] = Field(default_factory=dict)
