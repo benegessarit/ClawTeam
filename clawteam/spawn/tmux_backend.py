@@ -100,12 +100,14 @@ class TmuxBackend(SpawnBackend):
         if command_error:
             return command_error
 
-        # tmux launches the command through a shell, so only shell-safe
-        # environment names can be exported. The current host environment on
-        # WSL includes names like `PROGRAMFILES(X86)`, which would abort the
-        # shell before the pane becomes observable.
+        # Write env to temp file to avoid exposing secrets in terminal scrollback.
+        # The file is sourced then deleted — secrets never appear in the command line.
         export_vars = {k: v for k, v in env_vars.items() if _SHELL_ENV_KEY_RE.fullmatch(k)}
-        export_str = "; ".join(f"export {k}={shlex.quote(v)}" for k, v in export_vars.items())
+        env_fd, env_path = tempfile.mkstemp(prefix="clawteam-env-", suffix=".sh")
+        with os.fdopen(env_fd, "w") as f:
+            for k, v in export_vars.items():
+                f.write(f"export {k}={shlex.quote(v)}\n")
+        os.chmod(env_path, 0o600)  # restrict read to owner
 
         cmd_str = " ".join(shlex.quote(c) for c in final_command)
         # Append on-exit hook: runs immediately when agent process exits
@@ -114,13 +116,15 @@ class TmuxBackend(SpawnBackend):
             f"{exit_cmd} lifecycle on-exit --team {shlex.quote(team_name)} "
             f"--agent {shlex.quote(agent_name)}"
         )
+        # Source env from file (secrets stay off terminal), then delete the file
+        env_source = f". {shlex.quote(env_path)} && rm -f {shlex.quote(env_path)}"
         # Unset Claude nesting-detection env vars so spawned claude agents
         # don't refuse to start when the leader is itself a claude session.
         unset_clause = "unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION 2>/dev/null; "
         if cwd:
-            full_cmd = f"{unset_clause}{export_str}; cd {shlex.quote(cwd)} && {cmd_str}; {exit_hook}"
+            full_cmd = f"{unset_clause}{env_source}; cd {shlex.quote(cwd)} && {cmd_str}; {exit_hook}"
         else:
-            full_cmd = f"{unset_clause}{export_str}; {cmd_str}; {exit_hook}"
+            full_cmd = f"{unset_clause}{env_source}; {cmd_str}; {exit_hook}"
 
         # Check if tmux session exists
         check = subprocess.run(
