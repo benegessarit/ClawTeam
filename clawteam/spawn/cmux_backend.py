@@ -318,7 +318,7 @@ class CmuxBackend(SpawnBackend):
         exit_hook = (
             f"_ec=$?; "
             f"_already=$({exit_cmd} inbox peek {shlex.quote(team_name)} "
-            f"--agent leader 2>/dev/null | grep -c 'DONE:.*{agent_name}' || true); "
+            f"--agent leader 2>/dev/null | grep -cF 'DONE: {agent_name}' || true); "
             f'if [ "$_already" = "0" ]; then '
             f"{exit_cmd} inbox send {shlex.quote(team_name)} leader "
             f"\"DONE: {agent_name} exited (exit_code=$_ec)\" -f {shlex.quote(agent_name)} 2>/dev/null; "

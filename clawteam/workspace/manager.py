@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -42,6 +43,30 @@ def _registry_lock_path(team_name: str) -> Path:
     )
     p.mkdir(parents=True, exist_ok=True)
     return p / ".registry.lock"
+
+
+@contextmanager
+def _registry_lock(team_name: str):
+    """Acquire exclusive file lock on the workspace registry."""
+    lock_path = _registry_lock_path(team_name)
+    with lock_path.open("a+", encoding="utf-8") as lock_file:
+        if sys.platform == "win32":
+            pos = lock_file.tell()
+            lock_file.seek(0)
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+            lock_file.seek(pos)
+        else:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if sys.platform == "win32":
+                pos = lock_file.tell()
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                lock_file.seek(pos)
+            else:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _load_registry(team_name: str, repo_root: str) -> WorkspaceRegistry:
@@ -113,31 +138,14 @@ class WorkspaceManager:
             created_at=datetime.now(timezone.utc).isoformat(),
         )
 
-        lock_path = _registry_lock_path(team_name)
-        with lock_path.open("a+", encoding="utf-8") as lock_file:
-            if sys.platform == "win32":
-                pos = lock_file.tell()
-                lock_file.seek(0)
-                msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
-                lock_file.seek(pos)
-            else:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-            try:
-                registry = _load_registry(team_name, str(self.repo_root))
-                # Remove stale entry for the same agent, if any
-                registry.workspaces = [
-                    w for w in registry.workspaces if w.agent_name != agent_name
-                ]
-                registry.workspaces.append(info)
-                _save_registry(registry)
-            finally:
-                if sys.platform == "win32":
-                    pos = lock_file.tell()
-                    lock_file.seek(0)
-                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
-                    lock_file.seek(pos)
-                else:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        with _registry_lock(team_name):
+            registry = _load_registry(team_name, str(self.repo_root))
+            # Remove stale entry for the same agent, if any
+            registry.workspaces = [
+                w for w in registry.workspaces if w.agent_name != agent_name
+            ]
+            registry.workspaces.append(info)
+            _save_registry(registry)
 
         return info
 
@@ -187,29 +195,12 @@ class WorkspaceManager:
         except git.GitError as e:
             logger.warning("branch delete failed: %s", e)
 
-        lock_path = _registry_lock_path(team_name)
-        with lock_path.open("a+", encoding="utf-8") as lock_file:
-            if sys.platform == "win32":
-                pos = lock_file.tell()
-                lock_file.seek(0)
-                msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
-                lock_file.seek(pos)
-            else:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-            try:
-                registry = _load_registry(team_name, str(self.repo_root))
-                registry.workspaces = [
-                    w for w in registry.workspaces if w.agent_name != agent_name
-                ]
-                _save_registry(registry)
-            finally:
-                if sys.platform == "win32":
-                    pos = lock_file.tell()
-                    lock_file.seek(0)
-                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
-                    lock_file.seek(pos)
-                else:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        with _registry_lock(team_name):
+            registry = _load_registry(team_name, str(self.repo_root))
+            registry.workspaces = [
+                w for w in registry.workspaces if w.agent_name != agent_name
+            ]
+            _save_registry(registry)
         return True
 
     def cleanup_team(self, team_name: str) -> int:
