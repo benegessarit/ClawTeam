@@ -190,13 +190,27 @@ def test_tmux_backend_exports_spawn_path_for_agent_commands(monkeypatch, tmp_pat
 
     new_session = next(call for call in run_calls if call[:3] == ["tmux", "new-session", "-d"])
     full_cmd = new_session[-1]
-    assert f"export PATH={clawteam_bin.parent}:/usr/bin:/bin" in full_cmd
-    assert f"export CLAWTEAM_BIN={clawteam_bin}" in full_cmd
-    assert "export CLAWTEAM_DATA_DIR=/tmp/clawteam-data" in full_cmd
-    assert "export GOOGLE_CLOUD_PROJECT=demo-project" in full_cmd
+    # Env vars now written to a temp file (sourced+deleted), not inlined in full_cmd.
+    # Extract the env file path from the source command and verify its contents.
+    import re as _re
+    m = _re.search(r"\. (/[^ ]+clawteam-env-[^ ]+\.sh)", full_cmd)
+    assert m, f"env source command not found in full_cmd: {full_cmd}"
+    env_file = m.group(1)
+    import os as _os
+    env_contents = open(env_file).read()
+    # Env file has all safe exports; full_cmd sources+deletes it
+    assert "export PATH=" in env_contents
+    assert "export CLAWTEAM_DATA_DIR=/tmp/clawteam-data" in env_contents
+    assert "export GOOGLE_CLOUD_PROJECT=demo-project" in env_contents
+    assert "export CLAWTEAM_AGENT_NAME=worker1" in env_contents
+    assert "rm -f" in full_cmd  # env file deleted after sourcing
     assert "cd /tmp/demo &&" in full_cmd
     assert "PROGRAMFILES(X86)" not in full_cmd
-    assert f"{clawteam_bin} lifecycle on-exit --team demo-team --agent worker1" in full_cmd
+    assert "PROGRAMFILES(X86)" not in env_contents
+    assert "lifecycle on-exit --team demo-team --agent worker1" in full_cmd
+    # Verify file permissions (0o600 = owner-only read/write)
+    file_mode = _os.stat(env_file).st_mode & 0o777
+    assert file_mode == 0o600, f"env file permissions {oct(file_mode)} != 0o600"
 
 
 def test_tmux_backend_uses_configured_timeout_for_workspace_trust_prompt(monkeypatch, tmp_path):

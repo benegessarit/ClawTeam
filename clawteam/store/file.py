@@ -93,10 +93,10 @@ class FileTaskStore(BaseTaskStore):
             blocked_by=blocked_by or [],
             metadata=metadata or {},
         )
-        self._validate_blocked_by_unlocked(task.id, task.blocked_by)
-        if task.blocked_by:
-            task.status = TaskStatus.blocked
         with self._write_lock():
+            self._validate_blocked_by_unlocked(task.id, task.blocked_by)
+            if task.blocked_by:
+                task.status = TaskStatus.blocked
             self._save_unlocked(task)
         return task
 

@@ -303,6 +303,11 @@ class CmuxBackend(SpawnBackend):
             for k, v in export_vars.items():
                 f.write(f"export {k}={shlex.quote(v)}\n")
         os.chmod(env_path, 0o600)  # restrict read to owner
+        # Default close command (workspace mode). Surface mode overrides after
+        # surface_ref is known — the env file is sourced at shell runtime, so
+        # appending before launch is fine.
+        with open(env_path, "a") as f:
+            f.write(f"export _CMUX_CLOSE_CMD={shlex.quote(f'{_CMUX_BIN} close-workspace --workspace {workspace_name}')}\n")
 
         cmd_str = " ".join(shlex.quote(c) for c in final_command)
         # On-exit hook: runs when agent process exits.
@@ -313,10 +318,10 @@ class CmuxBackend(SpawnBackend):
         exit_hook = (
             f"_ec=$?; "
             f"_already=$({exit_cmd} inbox peek {shlex.quote(team_name)} "
-            f"--agent leader 2>/dev/null | grep -c 'DONE:' || true); "
+            f"--agent leader 2>/dev/null | grep -cF 'DONE: {agent_name}' || true); "
             f'if [ "$_already" = "0" ]; then '
             f"{exit_cmd} inbox send {shlex.quote(team_name)} leader "
-            f"\"DONE: agent exited (exit_code=$_ec)\" -f {shlex.quote(agent_name)} 2>/dev/null; "
+            f"\"DONE: {agent_name} exited (exit_code=$_ec)\" -f {shlex.quote(agent_name)} 2>/dev/null; "
             f"fi; "
             f"{exit_cmd} lifecycle on-exit --team {shlex.quote(team_name)} "
             f"--agent {shlex.quote(agent_name)}"
@@ -326,12 +331,12 @@ class CmuxBackend(SpawnBackend):
         # Clear sidebar badges on exit. Use $CMUX_WORKSPACE_ID which cmux
         # auto-sets in every shell it spawns — works for both workspace and surface mode.
         badge_cleanup = (
-            f"{shlex.quote(_CMUX_BIN)} clear-status agent --workspace \"$CMUX_WORKSPACE_ID\" 2>/dev/null"
+            f"{shlex.quote(_CMUX_BIN)} clear-status agent-{agent_name} --workspace \"$CMUX_WORKSPACE_ID\" 2>/dev/null"
         )
         cmux_cleanup = (
             f"{badge_cleanup}; "
             f"echo '\\n[Agent exited. Workspace closes in 30s. Press Ctrl-C to keep.]'; "
-            f"sleep 30 && {shlex.quote(_CMUX_BIN)} close-workspace --workspace {shlex.quote(ws_name)} 2>/dev/null"
+            f"sleep 30 && eval \"$_CMUX_CLOSE_CMD\" 2>/dev/null"
         )
         # Source env from file (secrets stay off terminal), then delete the file
         env_source = f". {shlex.quote(env_path)} && rm -f {shlex.quote(env_path)}"
@@ -387,6 +392,10 @@ class CmuxBackend(SpawnBackend):
                 [_CMUX_BIN, "rename-tab", "--surface", surface_ref, workspace_name],
                 capture_output=True, text=True, timeout=5,
             )
+
+            # Override close command: surface mode closes the tab, not the workspace
+            with open(env_path, "a") as f:
+                f.write(f"export _CMUX_CLOSE_CMD={shlex.quote(f'{_CMUX_BIN} close-surface --surface {surface_ref}')}\n")
 
             # Source the launcher so env vars land in the shell process
             subprocess.run(
@@ -445,7 +454,7 @@ class CmuxBackend(SpawnBackend):
         if badge_target:
             try:
                 subprocess.run(
-                    [_CMUX_BIN, "clear-status", "agent", "--workspace", badge_target],
+                    [_CMUX_BIN, "clear-status", f"agent-{agent_name}", "--workspace", badge_target],
                     capture_output=True, text=True, timeout=3,
                 )
             except (subprocess.TimeoutExpired, OSError):
@@ -457,7 +466,7 @@ class CmuxBackend(SpawnBackend):
                 # One badge: icon shows type, text shows what it's doing
                 short_name = agent_name[:60]
                 subprocess.run(
-                    [_CMUX_BIN, "set-status", "agent", short_name,
+                    [_CMUX_BIN, "set-status", f"agent-{agent_name}", short_name,
                      "--icon", icon, "--color", color, "--workspace", badge_target],
                     capture_output=True, text=True, timeout=5,
                 )
