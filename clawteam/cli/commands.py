@@ -2828,6 +2828,7 @@ def spawn_agent(
     replace: bool = typer.Option(False, "--replace", help="Replace a running agent with the same name"),
     skill: Optional[list[str]] = typer.Option(None, "--skill", help="Skill name(s) to inject into the agent's system prompt (repeatable, claude only)"),
     parent_workspace: Optional[str] = typer.Option(None, "--parent-workspace", help="Spawn as tab inside this cmux workspace ref (cmux backend only)"),
+    single_task: bool = typer.Option(False, "--single-task", help="Skip worker loop protocol (agent exits after one task)"),
 ):
     """Spawn a new agent process with identity + task as its initial prompt.
 
@@ -2982,6 +2983,8 @@ def spawn_agent(
         from clawteam.spawn.prompt import build_agent_prompt
 
         leader_name = TeamManager.get_leader_name(_team) or "leader"
+        # Auto-detect side-quest context when --single-task not explicitly set
+        _single_task = single_task or _team.startswith("sq-") or _team.startswith("sidequest-")
         prompt = build_agent_prompt(
             agent_name=_name,
             agent_id=_id,
@@ -2994,6 +2997,7 @@ def spawn_agent(
             workspace_branch=ws_branch,
             isolated_workspace=bool(workspace and cwd),
             repo_path=repo,
+            single_task=_single_task,
         )
 
     # Session resume: inject --resume flag for claude commands
