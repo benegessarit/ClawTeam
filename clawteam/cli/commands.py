@@ -3062,6 +3062,120 @@ def spawn_agent(
 
 
 # ============================================================================
+# Build Command (atomic handoff: team + task + cmux spawn)
+# ============================================================================
+
+
+@app.command("build")
+def build_handoff(
+    slug: str = typer.Option(..., "--slug", "-s", help="Project/task slug"),
+    prompt_file: str = typer.Option(..., "--prompt-file", "-p", help="Path to build prompt file"),
+    prefix: str = typer.Option("task", "--prefix", help="Team name prefix (task or build)"),
+    timeout: int = typer.Option(43200, "--timeout", help="Max wait time in seconds"),
+    parent_workspace: Optional[str] = typer.Option(None, "--parent-workspace", help="Explicit parent cmux workspace"),
+    repo: Optional[str] = typer.Option(None, "--repo", help="Git repo path (default: cwd)"),
+):
+    """Atomic build handoff: create team, register builder, create task, spawn cmux workspace.
+
+    Replaces the 5-step bash orchestration in clawteam-handoff.sh.
+    Output: JSON with team, agent, workspace, timeout.
+
+    Parent workspace detection priority:
+      1. --parent-workspace flag (explicit)
+      2. $CMUX_WORKSPACE_ID env var (correct: identifies caller's workspace)
+      3. No parent (standalone workspace)
+
+    Does NOT use 'cmux current-workspace' (returns focused workspace, not caller's).
+    """
+    from pathlib import Path as _P
+
+    team_name = f"{prefix}-{slug}"
+    agent_name = "builder"
+
+    # Validate prompt file
+    pf = _P(prompt_file).expanduser()
+    if not pf.is_file():
+        _output(
+            {"error": f"Prompt file not found: {prompt_file}"},
+            lambda d: console.print(f"[red]{d['error']}[/red]"),
+        )
+        raise typer.Exit(1)
+
+    # Resolve parent workspace: flag > env var > none
+    # NEVER use cmux current-workspace (returns focused, not caller's)
+    pw = parent_workspace
+    if pw is None:
+        pw = os.environ.get("CMUX_WORKSPACE_ID") or None
+
+    # Resolve repo
+    if repo is None:
+        import subprocess as _sp
+        try:
+            repo = _sp.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                capture_output=True, text=True, timeout=5,
+            ).stdout.strip() or "."
+        except Exception:
+            repo = "."
+
+    # Create task
+    from clawteam.team.tasks import TaskStore
+    try:
+        store = TaskStore(team_name)
+        store.create(subject="build", owner=agent_name, description=slug)
+    except Exception:
+        pass  # idempotent
+
+    # Set completion mode
+    os.environ["CLAWTEAM_COMPLETION_MODE"] = "explicit"
+
+    # Use spawn_agent's underlying logic directly via subprocess
+    # This avoids Typer/Click context issues and is the cleanest path
+    import subprocess as _sp
+    spawn_cmd = [
+        "clawteam", "spawn", "cmux",
+        "--team", team_name,
+        "--agent-name", agent_name,
+        "--task-file", str(pf),
+        "--workspace",
+        "--repo", repo,
+    ]
+    if pw:
+        spawn_cmd.extend(["--parent-workspace", pw])
+
+    result = _sp.run(spawn_cmd, capture_output=True, text=True, timeout=30)
+
+    if result.returncode != 0:
+        # Rollback team on failure
+        from clawteam.team.manager import TeamManager
+        TeamManager.cleanup(team_name)
+        error_msg = result.stderr.strip() or result.stdout.strip() or "unknown error"
+        _output(
+            {"error": f"Build spawn failed: {error_msg}"},
+            lambda d: console.print(f"[red]{d['error']}[/red]"),
+        )
+        raise typer.Exit(1)
+
+    # Extract workspace from spawn output
+    ws_path = ""
+    for line in result.stdout.splitlines():
+        if "Workspace:" in line:
+            ws_path = line.split("Workspace:", 1)[1].strip()
+            break
+
+    # Print spawn output for visibility
+    if result.stdout.strip():
+        console.print(result.stdout.strip())
+
+    _output(
+        {"team": team_name, "agent": agent_name, "workspace": ws_path, "timeout": timeout},
+        lambda d: console.print(
+            f'[green]OK[/green] Build: team={d["team"]} workspace={d["workspace"]}'
+        ),
+    )
+
+
+# ============================================================================
 # Identity Commands
 # ============================================================================
 
