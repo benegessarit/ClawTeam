@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import signal
 import time
@@ -11,6 +12,8 @@ from typing import Callable
 from clawteam.team.mailbox import MailboxManager
 from clawteam.team.models import TaskItem, TaskStatus, TeamMessage
 from clawteam.team.tasks import TaskStore
+
+logger = logging.getLogger(__name__)
 
 _DONE_RE = re.compile(r"^DONE\b", re.IGNORECASE)
 
@@ -120,6 +123,8 @@ class TaskWaiter:
                         self._messages_received += 1
                         if self.on_message:
                             self.on_message(msg)
+                        if msg.content and _DONE_RE.match(msg.content):
+                            self._auto_complete_from_inbox(msg)
                     # Read completion messages from task records
                     completion_messages = [
                         t.completion_message for t in tasks
@@ -179,19 +184,34 @@ class TaskWaiter:
 
 
     def _auto_complete_from_inbox(self, msg: TeamMessage) -> None:
-        """Auto-complete a task when its owner sends a DONE message via inbox."""
+        """Auto-complete tasks when their owner sends a DONE message via inbox."""
         sender = msg.from_agent
+
+        # Guard: don't auto-complete from agents known to be dead.
+        # A killed worker's stop hook may send DONE before work is finished.
+        if sender in self._known_dead:
+            logger.warning("DONE from dead agent %s — ignoring", sender)
+            return
+
         tasks = self.task_store.list_tasks()
-        # Find sender's active task — prefer in_progress over pending
-        agent_tasks = [t for t in tasks if t.owner == sender]
-        in_progress = [t for t in agent_tasks if t.status == TaskStatus.in_progress]
-        pending = [t for t in agent_tasks if t.status == TaskStatus.pending]
-        target = (in_progress or pending or [None])[0]
-        if target:
-            self.task_store.update(
-                target.id,
-                status=TaskStatus.completed,
-                completion_message=msg.content,
+        matched = 0
+        for task in tasks:
+            # Intentionally excludes blocked — blocked tasks have
+            # unresolved dependencies and should not be auto-completed.
+            if task.owner == sender and task.status in (
+                TaskStatus.pending, TaskStatus.in_progress
+            ):
+                self.task_store.update(
+                    task.id,
+                    status=TaskStatus.completed,
+                    completion_message=msg.content,
+                )
+                matched += 1
+
+        if matched == 0:
+            logger.warning(
+                "DONE from %s matched zero tasks — message consumed with no effect",
+                sender,
             )
 
     def _check_dead_agents(self) -> None:

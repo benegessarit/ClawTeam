@@ -128,27 +128,22 @@ class TestInboxDoneAutoComplete:
         assert store.get(t2.id).status == TaskStatus.completed
         assert store.get(t2.id).blocked_by == []
 
-    def test_done_prefers_in_progress_over_pending(self, store, mailbox, waiter):
-        """If agent owns both in_progress and pending tasks, complete in_progress first."""
+    def test_done_completes_all_owned_tasks(self, store, mailbox, waiter):
+        """DONE from agent completes ALL their pending/in_progress tasks."""
         t1 = store.create("first task", owner="worker")
         store.update(t1.id, status=TaskStatus.in_progress)
         t2 = store.create("second task", owner="worker")
-        # t2 stays pending
+        # t2 stays pending — both should be completed by DONE
 
-        mailbox.send(from_agent="worker", to="leader", content="DONE: first done")
+        mailbox.send(from_agent="worker", to="leader", content="DONE: all done")
 
-        # Complete t2 manually so wait finishes
-        def complete_t2():
-            import time
-            time.sleep(0.3)
-            store.update(t2.id, status=TaskStatus.completed)
-
-        threading.Thread(target=complete_t2, daemon=True).start()
         result = waiter.wait()
 
         assert result.status == "completed"
         assert store.get(t1.id).status == TaskStatus.completed
-        assert store.get(t1.id).completion_message == "DONE: first done"
+        assert store.get(t1.id).completion_message == "DONE: all done"
+        assert store.get(t2.id).status == TaskStatus.completed
+        assert store.get(t2.id).completion_message == "DONE: all done"
 
     def test_done_from_unknown_sender_ignored(self, store, mailbox, waiter):
         """DONE from a sender with no tasks should be harmless."""
@@ -169,6 +164,66 @@ class TestInboxDoneAutoComplete:
         assert result.status == "completed"
         # ghost's message didn't break anything
         assert store.get(t.id).status == TaskStatus.completed
+
+
+    def test_done_from_dead_agent_ignored(self, store, mailbox, waiter):
+        """DONE from an agent in _known_dead should NOT auto-complete."""
+        t = store.create("task", owner="killed-worker")
+        store.update(t.id, status=TaskStatus.in_progress)
+
+        # Simulate dead agent detection before DONE arrives
+        waiter._known_dead.add("killed-worker")
+
+        mailbox.send(from_agent="killed-worker", to="leader", content="DONE: stop hook fired")
+
+        # Complete task normally so wait doesn't hang
+        def complete_later():
+            import time
+            time.sleep(0.3)
+            store.update(t.id, status=TaskStatus.completed)
+
+        threading.Thread(target=complete_later, daemon=True).start()
+        result = waiter.wait()
+
+        assert result.status == "completed"
+        # completion_message should NOT be the inbox DONE (was set by manual update)
+        assert store.get(t.id).completion_message != "DONE: stop hook fired"
+
+    def test_done_zero_match_logs_warning(self, store, mailbox, waiter, caplog):
+        """DONE from sender with no tasks should log a warning."""
+        import logging
+
+        t = store.create("task", owner="real-worker")
+        store.update(t.id, status=TaskStatus.completed)
+
+        mailbox.send(from_agent="ghost", to="leader", content="DONE: nobody home")
+
+        with caplog.at_level(logging.WARNING, logger="clawteam.team.waiter"):
+            result = waiter.wait()
+
+        assert result.status == "completed"
+        assert any("matched zero tasks" in r.message for r in caplog.records)
+
+    def test_done_skips_blocked_tasks(self, store, mailbox, waiter):
+        """DONE should NOT auto-complete blocked tasks."""
+        t1 = store.create("blocker", owner="other-worker")
+        t2 = store.create("blocked task", owner="worker", blocked_by=[t1.id])
+        assert store.get(t2.id).status == TaskStatus.blocked
+
+        mailbox.send(from_agent="worker", to="leader", content="DONE: done")
+
+        # Complete both tasks normally so wait finishes
+        def complete_later():
+            import time
+            time.sleep(0.3)
+            store.update(t1.id, status=TaskStatus.completed)
+            time.sleep(0.1)
+            store.update(t2.id, status=TaskStatus.completed)
+
+        threading.Thread(target=complete_later, daemon=True).start()
+        result = waiter.wait()
+
+        assert result.status == "completed"
 
 
 class TestWaiterBasic:
