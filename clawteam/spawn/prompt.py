@@ -1,7 +1,8 @@
-"""Agent prompt builder — identity + task + context awareness.
+"""Agent prompt builder — identity + task + coordination.
 
-Coordination knowledge (how to use clawteam CLI) is provided
-by the ClawTeam Skill, not duplicated here.
+Order: Identity → Workspace → Task → Context → Coordination.
+Task content comes before coordination boilerplate so the agent
+sees its actual mission first.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ def build_agent_prompt(
     workspace_branch: str = "",
     isolated_workspace: bool = False,
     repo_path: str | None = None,
+    single_task: bool = False,
 ) -> str:
     """Build agent prompt: identity + task + context + coordination."""
     lines = [
@@ -64,29 +66,11 @@ def build_agent_prompt(
         else:
             lines.append("- Work directly in this repository path unless told otherwise.")
 
-    # Coordination protocol BEFORE task — task has last-word priority
+    # Task FIRST — user's instructions are the most important content
     lines.extend([
         "",
-        "## Coordination Protocol\n",
-        f"- Use `clawteam task list {team_name} --owner {agent_name}` to see your tasks.",
-        f"- Starting a task: `clawteam task update {team_name} <task-id> --status in_progress`",
-        "- Before marking a task completed, commit your changes in this repository with git.",
-        '- Use a clear commit message, e.g. `git add -A && git commit -m "Implement <task summary>"`.',
-        f"- Finishing a task: `clawteam task update {team_name} <task-id> --status completed`",
-        "- When you finish all tasks, send a summary to the leader:",
-        f'  `clawteam inbox send {team_name} {leader_name} "All tasks completed. <brief summary>"`',
-        "- If you are blocked or need help, message the leader:",
-        f'  `clawteam inbox send {team_name} {leader_name} "Need help: <description>"`',
-        f"- After finishing work, report your costs: `clawteam cost report {team_name} --input-tokens <N> --output-tokens <N> --cost-cents <N>`",
-        f"- Before finishing, save your session: `clawteam session save {team_name} --session-id <id>`",
-        "- Do not exit after the first task unless the leader explicitly tells you to stop.",
-        "",
-        "## Worker Loop Protocol\n",
-        f"- After finishing your current task batch, re-check `clawteam task list {team_name} --owner {agent_name}`.",
-        f"- Then check for new instructions with `clawteam inbox receive {team_name} --agent {agent_name}`.",
-        f"- If you become idle, notify the leader with `clawteam lifecycle idle {team_name}` and continue checking for new work.",
-        "- Repeat this loop until the leader confirms shutdown or there is truly no more work to do.",
-        "",
+        "## Task\n",
+        task,
     ])
 
     # Inject cross-agent context awareness
@@ -98,11 +82,37 @@ def build_agent_prompt(
             context_block,
         ])
 
-    # Task LAST — user's instructions get final priority
+    # Coordination protocol — reference material after task
     lines.extend([
         "",
-        "## Task\n",
-        task,
+        "## Coordination Protocol\n",
+        "- Your task is provided in the ## Task section above. Start working on it immediately.",
+        "- DO NOT check inbox, team info, or task list as your first action — your task is already assigned.",
+        f"- Use `clawteam task list {team_name} --owner {agent_name}` to see your tasks.",
+        f"- Starting a task: `clawteam task update {team_name} <task-id> --status in_progress`",
+        "- Before marking a task completed, commit your changes in this repository with git.",
+        '- Use a clear commit message, e.g. `git add -A && git commit -m "Implement <task summary>"`.',
+        f"- Finishing a task: `clawteam task update {team_name} <task-id> --status completed`",
+        "- When you finish all tasks, send a summary to the leader that INCLUDES paths to any files you created outside the working directory:",
+        f'  `clawteam inbox send {team_name} {leader_name} "DONE: <brief summary>. OUTPUTS: /absolute/path/to/file1, /absolute/path/to/file2"`',
+        "- The OUTPUTS section is critical — without it, the parent cannot find files you wrote to global paths like ~/Documents/.",
+        "- If you are blocked or need help, message the leader:",
+        f'  `clawteam inbox send {team_name} {leader_name} "Need help: <description>"`',
+        f"- After finishing work, report your costs: `clawteam cost report {team_name} --input-tokens <N> --output-tokens <N> --cost-cents <N>`",
+        f"- Before finishing, save your session: `clawteam session save {team_name} --session-id <id>`",
+        "- Do not exit after the first task unless the leader explicitly tells you to stop.",
     ])
+
+    if not single_task:
+        lines.extend([
+            "",
+            "## Worker Loop Protocol\n",
+            f"- After finishing your current task batch, re-check `clawteam task list {team_name} --owner {agent_name}`.",
+            f"- Then check for new instructions with `clawteam inbox receive {team_name} --agent {agent_name}`.",
+            f"- If you become idle, notify the leader with `clawteam lifecycle idle {team_name}` and continue checking for new work.",
+            "- Repeat this loop until the leader confirms shutdown or there is truly no more work to do.",
+        ])
+
+    lines.append("")
 
     return "\n".join(lines)
