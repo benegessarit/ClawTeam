@@ -609,7 +609,9 @@ class CmuxBackend(SpawnBackend):
         )
 
         if is_surface:
+            print(f"Workspace: {parent_workspace}")
             return f"Agent '{agent_name}' spawned as tab in workspace '{parent_workspace}'"
+        print(f"Workspace: {workspace_name}")
         return f"Agent '{agent_name}' spawned in cmux workspace '{workspace_name}'"
 
     def list_running(self) -> list[dict[str, str]]:
