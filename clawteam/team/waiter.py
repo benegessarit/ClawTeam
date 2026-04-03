@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import signal
 import time
 from dataclasses import dataclass, field
@@ -10,6 +11,8 @@ from typing import Callable
 from clawteam.team.mailbox import MailboxManager
 from clawteam.team.models import TaskItem, TaskStatus, TeamMessage
 from clawteam.team.tasks import TaskStore
+
+_DONE_RE = re.compile(r"^DONE\b", re.IGNORECASE)
 
 
 @dataclass
@@ -88,6 +91,9 @@ class TaskWaiter:
                     self._messages_received += 1
                     if self.on_message:
                         self.on_message(msg)
+                    # Auto-complete tasks when agent sends DONE via inbox
+                    if msg.content and _DONE_RE.match(msg.content):
+                        self._auto_complete_from_inbox(msg)
 
                 # 2. Detect dead agents and recover their tasks
                 self._check_dead_agents()
@@ -171,6 +177,22 @@ class TaskWaiter:
             signal.signal(signal.SIGINT, prev_sigint)
             signal.signal(signal.SIGTERM, prev_sigterm)
 
+
+    def _auto_complete_from_inbox(self, msg: TeamMessage) -> None:
+        """Auto-complete a task when its owner sends a DONE message via inbox."""
+        sender = msg.from_agent
+        tasks = self.task_store.list_tasks()
+        # Find sender's active task — prefer in_progress over pending
+        agent_tasks = [t for t in tasks if t.owner == sender]
+        in_progress = [t for t in agent_tasks if t.status == TaskStatus.in_progress]
+        pending = [t for t in agent_tasks if t.status == TaskStatus.pending]
+        target = (in_progress or pending or [None])[0]
+        if target:
+            self.task_store.update(
+                target.id,
+                status=TaskStatus.completed,
+                completion_message=msg.content,
+            )
 
     def _check_dead_agents(self) -> None:
         """Detect dead agents and mark their in_progress tasks as pending."""
