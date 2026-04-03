@@ -46,15 +46,22 @@ def current_branch(repo: Path) -> str:
 
 
 def default_remote_branch(repo: Path) -> str:
-    """Return the default remote branch (e.g. 'origin/master').
+    """Return the default local branch name (e.g. 'master').
 
-    Tries origin/HEAD first, then origin/master, then origin/main.
-    Falls back to current_branch if no remote found.
+    Resolves origin/HEAD to the local branch name, then checks
+    for master/main directly. Returns a local branch name — never
+    a remote ref — so ``git checkout`` attaches HEAD properly.
     """
-    for ref in ("origin/HEAD", "origin/master", "origin/main"):
+    # Resolve origin/HEAD → refs/remotes/origin/master → "master"
+    try:
+        ref = _run(["symbolic-ref", "refs/remotes/origin/HEAD"], cwd=repo)
+        return ref.split("/")[-1]
+    except GitError:
+        pass
+    for name in ("master", "main"):
         try:
-            _run(["rev-parse", "--verify", ref], cwd=repo)
-            return ref
+            _run(["rev-parse", "--verify", f"origin/{name}"], cwd=repo)
+            return name
         except GitError:
             continue
     return current_branch(repo)
@@ -105,6 +112,16 @@ def merge_branch(
     no_ff: bool = True,
 ) -> tuple[bool, str]:
     """Merge *branch* into *target*. Returns (success, output)."""
+    # Validate target is a local branch — not a remote ref, tag, or SHA
+    ref_check = subprocess.run(
+        ["git", "show-ref", "--verify", f"refs/heads/{target}"],
+        cwd=repo, capture_output=True,
+    )
+    if ref_check.returncode != 0:
+        raise GitError(
+            f"Target '{target}' is not a local branch. "
+            "Use a local branch name (e.g., 'master') not a remote ref (e.g., 'origin/master')."
+        )
     _run(["checkout", target], cwd=repo)
     args = ["merge", "--no-verify"]
     if no_ff:
