@@ -295,6 +295,9 @@ class CmuxBackend(SpawnBackend):
             env_vars["CLAWTEAM_REPO_SLUG"] = repo_slug
         # Inject context awareness flags
         env_vars["CLAWTEAM_CONTEXT_ENABLED"] = "1"
+        # Translate CLAWTEAM_COMPLETION_MODE=explicit into --verify flag for EXIT trap
+        if env_vars.get("CLAWTEAM_COMPLETION_MODE") == "explicit":
+            env_vars["CLAWTEAM_VERIFY_FLAG"] = "--verify pr-merged"
         if env:
             env_vars.update(env)
         env_vars["PATH"] = build_spawn_path(env_vars.get("PATH", os.environ.get("PATH")))
@@ -346,31 +349,17 @@ class CmuxBackend(SpawnBackend):
             f' --workspace "$CMUX_WORKSPACE_ID" 2>/dev/null'
         )
         # Build _on_exit function body — runs as trap EXIT handler.
-        # verify_outcome: three-state PR merge check (only when completion_mode=explicit)
-        verify_outcome = (
-            'if [ "${CLAWTEAM_COMPLETION_MODE:-}" = "explicit" ] '
-            '&& [ -n "${CLAWTEAM_REPO_SLUG:-}" ]; then '
-            '_branch=$(git branch --show-current 2>/dev/null); '
-            '_merged=$(timeout 5 gh pr list --repo "$CLAWTEAM_REPO_SLUG" '
-            '--head "$_branch" --state merged --json number -L 1 2>/dev/null); '
-            '_gh_rc=$?; '
-            'if [ -n "$_merged" ] && [ "$_merged" != "[]" ]; then _outcome=DONE; '
-            'elif [ "$_gh_rc" -eq 0 ]; then _outcome=EXITED; '
-            'else _outcome=UNKNOWN; fi; '
-            'fi'
-        )
+        # Unified: one `task complete` call handles completion + optional PR verification.
+        # --verify pr-merged is passed when CLAWTEAM_COMPLETION_MODE=explicit.
+        verify_flag = '${CLAWTEAM_VERIFY_FLAG:-}'
         on_exit_body = (
             f"_ec=$?; "
-            f"{verify_outcome}; "
-            # Dedup: only send DONE if agent hasn't already posted one
-            f"_already=$({exit_cmd} inbox peek {shlex.quote(team_name)} "
-            f"--agent leader 2>/dev/null | grep -cF 'DONE: {agent_name}' || true); "
-            f'if [ "$_already" = "0" ]; then '
-            # Include outcome in message when available
-            f'_msg="DONE: {agent_name} exited (exit_code=$_ec${{_outcome:+, outcome=$_outcome}})"; '
-            f"{exit_cmd} inbox send {shlex.quote(team_name)} leader "
-            f'"$_msg" -f {shlex.quote(agent_name)} 2>/dev/null; '
-            f"fi; "
+            f'_msg="DONE: {agent_name} exited (exit_code=$_ec)"; '
+            f"echo \"$_msg\" > /tmp/completion-{agent_name}.txt; "
+            f"{exit_cmd} task complete {shlex.quote(team_name)} "
+            f"--agent {shlex.quote(agent_name)} "
+            f"--message-file /tmp/completion-{agent_name}.txt "
+            f"{verify_flag} 2>/dev/null; "
             f"{exit_cmd} lifecycle on-exit --team {shlex.quote(team_name)} "
             f"--agent {shlex.quote(agent_name)}; "
             f"{badge_cleanup}; "

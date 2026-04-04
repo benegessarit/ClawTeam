@@ -26,6 +26,7 @@ class WaitResult:
     elapsed: float = 0.0
     total: int = 0
     completed: int = 0
+    failed: int = 0
     in_progress: int = 0
     pending: int = 0
     blocked: int = 0
@@ -105,19 +106,20 @@ class TaskWaiter:
                 tasks = self.task_store.list_tasks()
                 total = len(tasks)
                 completed = sum(1 for t in tasks if t.status == TaskStatus.completed)
+                failed = sum(1 for t in tasks if t.status == TaskStatus.failed)
                 in_progress = sum(1 for t in tasks if t.status == TaskStatus.in_progress)
                 pending = sum(1 for t in tasks if t.status == TaskStatus.pending)
                 blocked = sum(1 for t in tasks if t.status == TaskStatus.blocked)
 
                 # Deduplicate progress output
-                summary = f"{completed}/{total}/{in_progress}/{pending}/{blocked}"
+                summary = f"{completed}/{failed}/{total}/{in_progress}/{pending}/{blocked}"
                 if summary != last_summary:
                     if self.on_progress:
                         self.on_progress(completed, total, in_progress, pending, blocked)
                     last_summary = summary
 
-                # 4. All done?
-                if total > 0 and completed == total:
+                # 4. All done? (completed + failed == total means no tasks are still running)
+                if total > 0 and (completed + failed) == total:
                     # Final drain — catch messages that arrived after task completion
                     for msg in self.mailbox.receive(self.agent_name, limit=50):
                         self._messages_received += 1
@@ -136,6 +138,7 @@ class TaskWaiter:
                         elapsed=elapsed,
                         total=total,
                         completed=completed,
+                        failed=failed,
                         in_progress=0,
                         pending=0,
                         blocked=0,
@@ -152,6 +155,7 @@ class TaskWaiter:
                         elapsed=elapsed,
                         total=total,
                         completed=completed,
+                        failed=failed,
                         in_progress=in_progress,
                         pending=pending,
                         blocked=blocked,
@@ -171,6 +175,7 @@ class TaskWaiter:
                 elapsed=elapsed,
                 total=total,
                 completed=sum(1 for t in tasks if t.status == TaskStatus.completed),
+                failed=sum(1 for t in tasks if t.status == TaskStatus.failed),
                 in_progress=sum(1 for t in tasks if t.status == TaskStatus.in_progress),
                 pending=sum(1 for t in tasks if t.status == TaskStatus.pending),
                 blocked=sum(1 for t in tasks if t.status == TaskStatus.blocked),

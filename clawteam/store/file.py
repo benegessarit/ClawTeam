@@ -138,12 +138,12 @@ class FileTaskStore(BaseTaskStore):
                 if not task.started_at:
                     task.started_at = _now_iso()
 
-            if status in (TaskStatus.completed, TaskStatus.pending):
+            if status in (TaskStatus.completed, TaskStatus.failed, TaskStatus.pending):
                 task.locked_by = ""
                 task.locked_at = ""
 
             # duration tracking
-            if status == TaskStatus.completed and task.started_at:
+            if status in (TaskStatus.completed, TaskStatus.failed) and task.started_at:
                 try:
                     start = datetime.fromisoformat(task.started_at)
                     duration_secs = (datetime.now(timezone.utc) - start).total_seconds()
@@ -180,7 +180,7 @@ class FileTaskStore(BaseTaskStore):
                 task.metadata.update(metadata)
             task.updated_at = _now_iso()
 
-            if task.status == TaskStatus.completed:
+            if task.status in (TaskStatus.completed, TaskStatus.failed):
                 self._resolve_dependents_unlocked(task_id)
 
             self._save_unlocked(task)

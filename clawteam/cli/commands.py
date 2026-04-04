@@ -1975,7 +1975,7 @@ def task_get(
 def task_update(
     team: str = typer.Argument(..., help="Team name"),
     task_id: str = typer.Argument(..., help="Task ID"),
-    status: Optional[str] = typer.Option(None, "--status", "-s", help="New status: pending, in_progress, completed, blocked"),
+    status: Optional[str] = typer.Option(None, "--status", "-s", help="New status: pending, in_progress, completed, failed, blocked"),
     owner: Optional[str] = typer.Option(None, "--owner", "--agent", "-o", "-a", help="New owner"),
     subject: Optional[str] = typer.Option(None, "--subject", help="New subject"),
     description: Optional[str] = typer.Option(None, "--description", "-d", help="New description"),
@@ -2116,6 +2116,91 @@ def task_stats(
         console.print(table)
 
     _output(stats, _human)
+
+
+@task_app.command("complete")
+def task_complete(
+    team: str = typer.Argument(..., help="Team name"),
+    agent: str = typer.Option(..., "--agent", "-a", help="Agent name whose in_progress tasks to complete"),
+    message: Optional[str] = typer.Option(None, "--message", "-m", help="Completion message"),
+    message_file: Optional[str] = typer.Option(None, "--message-file", help="Read completion message from file"),
+    verify: Optional[str] = typer.Option(None, "--verify", help="Verification check before completing (e.g. 'pr-merged')"),
+):
+    """Complete all in_progress tasks owned by an agent.
+
+    Finds all in_progress tasks owned by AGENT and marks them completed.
+    If --verify pr-merged is set, checks GitHub for a merged PR first;
+    marks tasks failed if verification fails.
+    Idempotent: second call is a no-op (0 tasks affected).
+    """
+    from clawteam.team.models import TaskStatus
+    from clawteam.team.tasks import TaskStore
+
+    store = TaskStore(team)
+    tasks = store.list_tasks()
+
+    # Find in_progress tasks owned by this agent
+    targets = [
+        t for t in tasks
+        if t.owner == agent and t.status == TaskStatus.in_progress
+    ]
+
+    if not targets:
+        data = {"affected": 0, "task_ids": [], "status": "no_op"}
+        _output(data, lambda d: console.print(f"[dim]0 tasks affected (already completed or none in_progress)[/dim]"))
+        return
+
+    # Read message from file if specified
+    completion_msg = message or ""
+    if message_file:
+        try:
+            completion_msg = Path(message_file).read_text().strip()
+        except OSError as e:
+            completion_msg = f"(message-file read failed: {e})"
+
+    # Verification check
+    final_status = TaskStatus.completed
+    if verify == "pr-merged":
+        try:
+            branch = subprocess.run(
+                ["git", "branch", "--show-current"],
+                capture_output=True, text=True, timeout=5,
+            ).stdout.strip()
+            if branch:
+                result = subprocess.run(
+                    ["gh", "pr", "list", "--head", branch, "--state", "merged",
+                     "--json", "number", "-L", "1"],
+                    capture_output=True, text=True, timeout=15,
+                )
+                if result.returncode == 0:
+                    prs = json.loads(result.stdout)
+                    if not prs:
+                        final_status = TaskStatus.failed
+                        completion_msg = f"PR not merged for branch '{branch}'. {completion_msg}".strip()
+                else:
+                    final_status = TaskStatus.failed
+                    completion_msg = f"gh failed (rc={result.returncode}). {completion_msg}".strip()
+            else:
+                final_status = TaskStatus.failed
+                completion_msg = f"No current branch detected. {completion_msg}".strip()
+        except Exception as e:
+            final_status = TaskStatus.failed
+            completion_msg = f"Verify failed: {e}. {completion_msg}".strip()
+
+    affected_ids = []
+    for t in targets:
+        store.update(t.id, status=final_status, completion_message=completion_msg or None)
+        affected_ids.append(t.id)
+
+    data = {
+        "affected": len(affected_ids),
+        "task_ids": affected_ids,
+        "status": final_status.value,
+        "message": completion_msg,
+    }
+    _output(data, lambda d: console.print(
+        f"[green]OK[/green] {d['affected']} task(s) marked {d['status']}: {', '.join(d['task_ids'])}"
+    ))
 
 
 # ============================================================================
@@ -2370,6 +2455,7 @@ def task_wait(
             "elapsed": round(result.elapsed, 1),
             "total": result.total,
             "completed": result.completed,
+            "failed": result.failed,
             "in_progress": result.in_progress,
             "pending": result.pending,
             "blocked": result.blocked,
@@ -2380,36 +2466,60 @@ def task_wait(
     else:
         console.print()
         if result.status == "completed":
-            console.print(
-                f"[green]All {result.total} tasks completed![/green]"
-                f" ({result.elapsed:.1f}s, {result.messages_received} messages)"
-            )
+            if result.failed > 0:
+                console.print(
+                    f"[yellow]All {result.total} tasks finished[/yellow]"
+                    f" ({result.completed} completed, {result.failed} failed)"
+                    f" ({result.elapsed:.1f}s, {result.messages_received} messages)"
+                )
+            else:
+                console.print(
+                    f"[green]All {result.total} tasks completed![/green]"
+                    f" ({result.elapsed:.1f}s, {result.messages_received} messages)"
+                )
             for msg in result.completion_messages:
                 console.print(f"  {msg}")
+            if result.failed > 0:
+                _print_failed_tasks(result.task_details)
         elif result.status == "timeout":
             console.print(
                 f"[yellow]Timeout[/yellow] after {result.elapsed:.1f}s."
-                f" {result.completed}/{result.total} completed."
+                f" {result.completed}/{result.total} completed, {result.failed} failed."
             )
             _print_incomplete_tasks(result.task_details)
         else:
             console.print(
                 f"[yellow]Interrupted[/yellow] after {result.elapsed:.1f}s."
-                f" {result.completed}/{result.total} completed."
+                f" {result.completed}/{result.total} completed, {result.failed} failed."
             )
             _print_incomplete_tasks(result.task_details)
 
-    if result.status != "completed":
+    # Exit 0 only when all tasks completed with zero failures
+    if result.status != "completed" or result.failed > 0:
         raise typer.Exit(1)
 
 
 def _print_incomplete_tasks(task_details: list[dict]):
-    """Print tasks that are not completed."""
-    incomplete = [t for t in task_details if t["status"] != "completed"]
+    """Print tasks that are not completed or failed."""
+    incomplete = [t for t in task_details if t["status"] not in ("completed", "failed")]
     if incomplete:
         console.print("  Incomplete tasks:")
         for t in incomplete:
             console.print(f"    [{t['status']}] {t['id']}  {t['subject']}  (owner: {t['owner'] or '-'})")
+    failed = [t for t in task_details if t["status"] == "failed"]
+    if failed:
+        console.print("  Failed tasks:")
+        for t in failed:
+            console.print(f"    [red][failed][/red] {t['id']}  {t['subject']}  (owner: {t['owner'] or '-'})")
+
+
+def _print_failed_tasks(task_details: list[dict]):
+    """Print only failed tasks."""
+    failed = [t for t in task_details if t["status"] == "failed"]
+    if failed:
+        console.print("  Failed tasks:")
+        for t in failed:
+            console.print(f"    [red][failed][/red] {t['id']}  {t['subject']}  (owner: {t['owner'] or '-'})")
 
 
 # ============================================================================
@@ -2712,9 +2822,11 @@ def lifecycle_on_exit(
     team: str = typer.Option(..., "--team", "-t", help="Team name"),
     agent: str = typer.Option(..., "--agent", "-n", help="Agent name"),
 ):
-    """Handle agent process exit: clean up session and reset in_progress tasks.
+    """Handle agent process exit: clean up session and reset abandoned tasks.
 
-    This is called automatically as a post-exit hook when an agent process terminates.
+    Called automatically AFTER `task complete` in the EXIT trap.
+    Only resets tasks still in_progress (truly abandoned — task complete failed or
+    agent was killed before it ran). Completed/failed tasks are left untouched.
     """
     from clawteam.spawn.sessions import SessionStore
     from clawteam.team.mailbox import MailboxManager
